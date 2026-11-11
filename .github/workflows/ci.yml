@@ -4,7 +4,7 @@ on: [push, pull_request]
 
 jobs:
   build:
-    name: Build & Static Security Analysis (SAST)
+    name: Build, SAST & SCA Analysis
     runs-on: ubuntu-latest
 
     steps:
@@ -14,7 +14,7 @@ jobs:
       - name: Comprobar construcción de la imagen (Build)
         run: docker build -t juice-shop-app .
 
-      # ETAPA SAST: Analisis Estático de Código Fuente
+      # 1.ETAPA SAST: Análisis Estático de Código Fuente
       - name: Ejecutar SAST (Semgrep)
         uses: semgrep/semgrep-action@v1
         continue-on-error: true # Quality Gate: Modo aviso
@@ -22,3 +22,20 @@ jobs:
           config: >-
             p/security-audit
             p/secrets
+
+      # 2.ETAPA SCA: Analisis de Dependencias de Terceros
+      - name: Ejecutar SCA (OWASP Dependency-Check)
+        uses: dependency-check/Dependency-Check_Action@main
+        continue-on-error: true # Quality Gate: Modo aviso
+        with:
+          project: 'OWASP Juice Shop'
+          path: '.'
+          format: 'HTML'
+          out: 'reports'
+
+      # Guardar el reporte
+      - name: Archivar informe de SCA
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-check-report
+          path: 'reports/dependency-check-report.html'
