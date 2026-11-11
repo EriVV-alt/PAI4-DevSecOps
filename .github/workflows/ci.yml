@@ -8,10 +8,15 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Descargar el código fuente
+      - name: Descargar el codigo fuente
         uses: actions/checkout@v4
 
-      - name: Comprobar construcción de la imagen (Build)
+      - name: Configurar entorno Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Comprobar construccion de la imagen (Build)
         run: docker build -t juice-shop-app .
 
       # 1. ETAPA SAST: Análisis Estático de Código Fuente
@@ -23,22 +28,17 @@ jobs:
             p/security-audit
             p/secrets
 
-      # 2. ETAPA SCA: Analisis de Dependencias de Terceros
-      - name: Ejecutar SCA (OWASP Dependency-Check)
-        uses: dependency-check/Dependency-Check_Action@main
+      # 2. ETAPA SCA: Analisis de Dependencias SCA
+      - name: Ejecutar SCA (Analisis de dependencias Node.js)
         continue-on-error: true # Quality Gate: Modo aviso
-        with:
-          project: 'OWASP Juice Shop'
-          path: '.'
-          format: 'HTML'
-          out: 'reports'
-          args: >-
-            --enableExperimental
-            --scan package.json
+        run: |
+          mkdir -p reports
+          npm audit --json > reports/sca-dependencies-report.json || true
+          npm audit > reports/sca-dependencies-report.txt || true
 
-      # Guardar el reporte como descargable
-      - name: Archivar informe de SCA
+      # Archivar informes de SCA como descargables
+      - name: Archivar informes de SCA
         uses: actions/upload-artifact@v4
         with:
-          name: dependency-check-report
-          path: 'reports/dependency-check-report.html'
+          name: sca-dependencies-report
+          path: reports/
