@@ -4,10 +4,21 @@ on: [push, pull_request]
 
 jobs:
   build:
+    name: Build & Static Security Analysis (SAST)
     runs-on: ubuntu-latest
+
     steps:
-      - name: Descargar el código
+      - name: Descargar el código fuente
         uses: actions/checkout@v4
-      
-      - name: Comprobar build de Docker
+
+      - name: Comprobar construcción de la imagen (Build)
         run: docker build -t juice-shop-app .
+
+      # ETAPA SAST: Analisis Estático de Código Fuente
+      - name: Ejecutar SAST (Semgrep)
+        uses: semgrep/semgrep-action@v1
+        continue-on-error: true # Quality Gate: Modo aviso
+        with:
+          config: >-
+            p/security-audit
+            p/secrets
