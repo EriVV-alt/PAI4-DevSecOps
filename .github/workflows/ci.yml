@@ -1,15 +1,32 @@
 name: DevSecOps CI Pipeline
 
-on: [push, pull_request]
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      gate_max_critical:
+        description: "Gate B: max. CRITICAL permitidos"
+        default: "0"
+      gate_max_high:
+        description: "Gate B: max. HIGH permitidos"
+        default: "0"
+
+permissions:
+  contents: read
 
 jobs:
   build:
-    name: Build, SAST & SCA Analysis
+    name: DevSecOps Pipeline (Build, SAST, SCA, IaC, DAST, Gate)
     runs-on: ubuntu-latest
+    timeout-minutes: 45
 
     steps:
       - name: Descargar el codigo fuente
         uses: actions/checkout@v4
+
+      - name: Preparar carpeta de informes
+        run: mkdir -p reports && chmod 777 reports  # runner efimero; ZAP corre como usuario zap
 
       - name: Configurar entorno Node.js
         uses: actions/setup-node@v4
@@ -36,25 +53,43 @@ jobs:
           npm audit --json > reports/sca-dependencies-report.json || true
           npm audit > reports/sca-dependencies-report.txt || true
 
-      # 3 etapa iac y contenedor analisis de imagen con trivy
-      - name: Ejecutar IaC y seguridad de contenedor (Trivy)
-        continue-on-error: true
+      # 3. IaC-Scan del Dockerfile
+      - name: Ejecutar IaC (Trivy config sobre Dockerfile)
+        continue-on-error: true # Quality Gate: Modo aviso
         run: |
-          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v $(pwd)/reports:/reports aquasec/trivy:latest image --format json --output /reports/trivy-report.json --severity HIGH,CRITICAL juice-shop-app || true
+          docker run --rm -v $(pwd):/src -v $(pwd)/reports:/reports \
+            aquasec/trivy:latest config \
+            --format json --output /reports/trivy-iac-report.json \
+            --severity LOW,MEDIUM,HIGH,CRITICAL /src
 
-      # 4 etapa staging despliegue de la aplicacion en entorno de pruebas
+      # 4. Container-Image-Scan
+      - name: Ejecutar seguridad de contenedor (Trivy image)
+        continue-on-error: true # Quality Gate: Modo aviso
+        run: |
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+            -v $(pwd)/reports:/reports aquasec/trivy:latest image \
+            --format json --output /reports/trivy-image-report.json \
+            --severity HIGH,CRITICAL juice-shop-app
+
+      # 5 etapa staging despliegue de la aplicacion en entorno de pruebas
       - name: Iniciar aplicacion para pruebas dinamicas (Staging)
         run: |
           docker run -d -p 3000:3000 --name staging-app juice-shop-app
           echo "esperando disponibilidad de la aplicacion"
-          timeout 60 bash -c 'until curl -s -f http://localhost:3000 > /dev/null; do sleep 2; done'
+          timeout 60 bash -c 'until curl -s -f http://localhost:3000 > /dev/null; do sleep 2; done' || { docker logs staging-app; exit 1; }
           echo "aplicacion iniciada correctamente en http://localhost:3000"
 
-      # 5 etapa dast analisis dinamico de seguridad web con owasp zap
+      # 6 etapa dast analisis dinamico de seguridad web con owasp zap
       - name: Ejecutar DAST (OWASP ZAP)
-        continue-on-error: true
+        continue-on-error: true # Quality Gate: Modo aviso
         run: |
-          docker run --rm --network="host" -v $(pwd)/reports:/zap/wrk:rw zaproxy/zap-stable zap-baseline.py -t http://localhost:3000 -J zap-report.json -r zap-report.html -I || true
+          docker run --rm --network=host -v $(pwd)/reports:/zap/wrk:rw \
+            zaproxy/zap-stable zap-baseline.py -t http://localhost:3000 \
+            -J zap-report.json -r zap-report.html -I
+
+      - name: Detener staging
+        if: always()
+        run: docker rm -f staging-app || true
 
       # archivar todos los informes de seguridad generados para defectdojo
       - name: Archivar informes de seguridad
@@ -64,17 +99,9 @@ jobs:
           name: security-reports
           path: reports/
 
-      # 6 quality gate bloqueante de produccion segun figura cuatro del enunciado
-      - name: Evaluar Quality Gate bloqueante
-        run: |
-          python3 -c "
-          import json, sys
-          with open('reports/sca-dependencies-report.json') as f:
-              data = json.load(f)
-              crit = data.get('metadata', {}).get('vulnerabilities', {}).get('critical', 0)
-              high = data.get('metadata', {}).get('vulnerabilities', {}).get('high', 0)
-              if crit > 0 or high > 0:
-                  print(f'bloqueo de seguridad detectadas {crit} vulnerabilidades criticas y {high} altas')
-                  print('el pipeline se detiene y no se despliega en produccion')
-                  sys.exit(1)
-          "          
+      # quality gate bloqueante de produccion segun figura cuatro del enunciado
+      - name: Quality Gate B (bloqueante)
+        env:
+          GATE_MAX_CRITICAL: ${{ github.event.inputs.gate_max_critical || '0' }}
+          GATE_MAX_HIGH: ${{ github.event.inputs.gate_max_high || '0' }}
+        run: python3 scripts/quality_gate.py
