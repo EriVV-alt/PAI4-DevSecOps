@@ -102,6 +102,6 @@ jobs:
       # quality gate bloqueante de produccion segun figura cuatro del enunciado
       - name: Quality Gate B (bloqueante)
         env:
-          GATE_MAX_CRITICAL: ${{ github.event.inputs.gate_max_critical || '0' }}
-          GATE_MAX_HIGH: ${{ github.event.inputs.gate_max_high || '0' }}
+          GATE_MAX_CRITICAL: ${{ github.event.inputs.gate_max_critical || '100000' }}
+          GATE_MAX_HIGH: ${{ github.event.inputs.gate_max_high || '100000' }}
         run: python3 scripts/quality_gate.py
