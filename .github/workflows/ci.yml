@@ -15,6 +15,10 @@ on:
 permissions:
   contents: read
 
+env:
+  TRIVY_IMAGE: aquasec/trivy:0.76.2
+  ZAP_IMAGE: zaproxy/zap-stable:2.17.0
+
 jobs:
   build:
     name: DevSecOps Pipeline (Build, SAST, SCA, IaC, DAST, Gate)
@@ -58,18 +62,26 @@ jobs:
         continue-on-error: true # Quality Gate: Modo aviso
         run: |
           docker run --rm -v $(pwd):/src -v $(pwd)/reports:/reports \
-            aquasec/trivy:latest config \
+            $TRIVY_IMAGE config \
             --format json --output /reports/trivy-iac-report.json \
             --severity LOW,MEDIUM,HIGH,CRITICAL /src
 
-      # 4. Container-Image-Scan
+      # 4. Container-Image-Scan (sin Docker Socket)
       - name: Ejecutar seguridad de contenedor (Trivy image)
         continue-on-error: true # Quality Gate: Modo aviso
         run: |
-          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
-            -v $(pwd)/reports:/reports aquasec/trivy:latest image \
-            --format json --output /reports/trivy-image-report.json \
-            --severity HIGH,CRITICAL juice-shop-app
+          docker save juice-shop-app -o image.tar
+          
+          docker run --rm \
+            -v "$(pwd)/image.tar:/image.tar:ro" \
+            -v "$(pwd)/reports:/reports" \
+            aquasec/trivy:latest image \
+            --input /image.tar \
+            --format json \
+            --output /reports/trivy-image-report.json \
+            --severity HIGH,CRITICAL
+          
+          rm -f image.tar
 
       # 5 etapa staging despliegue de la aplicacion en entorno de pruebas
       - name: Iniciar aplicacion para pruebas dinamicas (Staging)
@@ -84,7 +96,7 @@ jobs:
         continue-on-error: true # Quality Gate: Modo aviso
         run: |
           docker run --rm --network=host -v $(pwd)/reports:/zap/wrk:rw \
-            zaproxy/zap-stable zap-baseline.py -t http://localhost:3000 \
+            $ZAP_IMAGE zap-baseline.py -t http://localhost:3000 \
             -J zap-report.json -r zap-report.html -I
 
       - name: Detener staging

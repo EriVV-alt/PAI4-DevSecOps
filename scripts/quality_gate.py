@@ -28,7 +28,7 @@ def count_npm(d):
 def count_trivy(d):
     crit = high = 0
     for r in d.get("Results", []):
-        for item in (r.get("Vulnerabilities") or []) + (r.get("Misconfigurations") or []):
+        for item in (r.get("Vulnerabilities") or []) + (r.get("Misconfigurations") or []) + (r.get("Secrets") or []):
             sev = item.get("Severity")
             if sev == "CRITICAL":
                 crit += 1
