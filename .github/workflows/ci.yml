@@ -75,7 +75,7 @@ jobs:
           docker run --rm \
             -v "$(pwd)/image.tar:/image.tar:ro" \
             -v "$(pwd)/reports:/reports" \
-            aquasec/trivy:latest image \
+            $TRIVY_IMAGE image \
             --input /image.tar \
             --format json \
             --output /reports/trivy-image-report.json \
