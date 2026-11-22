@@ -99,6 +99,17 @@ jobs:
           name: security-reports
           path: reports/
 
+      # enviar informes de seguridad a defectdojo (siempre, aunque falle quality gate b)
+      - name: Subir informes a DefectDojo
+        if: always()
+        env:
+          DEFECTDOJO_URL: ${{ secrets.DEFECTDOJO_URL }}
+          DEFECTDOJO_API_KEY: ${{ secrets.DEFECTDOJO_API_KEY }}
+          DEFECTDOJO_ENGAGEMENT_ID: ${{ secrets.DEFECTDOJO_ENGAGEMENT_ID }}
+        run: |
+          python3 -c "import requests" 2>/dev/null || pip install --break-system-packages requests
+          python3 scripts/upload_to_defectdojo.py
+
       # quality gate bloqueante de produccion segun figura cuatro del enunciado
       - name: Quality Gate B (bloqueante)
         env:
