@@ -3,21 +3,35 @@
 import json
 import os
 import sys
+import xml.etree.ElementTree as ET
 
 REPORTS = "reports"
 MAX_CRITICAL = int(os.environ.get("GATE_MAX_CRITICAL", "0"))
 MAX_HIGH = int(os.environ.get("GATE_MAX_HIGH", "0"))
 
 
-def load(name):
+def fail_closed(path, err):
+    # abortar con fallo seguro si falta un informe o esta corrupto
+    print(f"[GATE][ERROR] Informe {path} no disponible o invalido: {err}")
+    print("[GATE] Fail-closed: sin informe no se puede garantizar la seguridad -> BLOQUEO")
+    sys.exit(2)
+
+
+def load_json(name):
     path = os.path.join(REPORTS, name)
     try:
         with open(path, encoding="utf-8") as f:
             return json.load(f)
     except (OSError, json.JSONDecodeError) as e:
-        print(f"[GATE][ERROR] Informe {path} no disponible o invalido: {e}")
-        print("[GATE] Fail-closed: sin informe no se puede garantizar la seguridad -> BLOQUEO")
-        sys.exit(2)
+        fail_closed(path, e)
+
+
+def load_xml(name):
+    path = os.path.join(REPORTS, name)
+    try:
+        return ET.parse(path).getroot()
+    except (OSError, ET.ParseError) as e:
+        fail_closed(path, e)
 
 
 def count_npm(d):
@@ -37,31 +51,27 @@ def count_trivy(d):
     return crit, high
 
 
-def count_zap(d):
-    # ZAP no tiene nivel critical; riskcode 3 = High
+def count_zap(root):
+    # zap no tiene nivel critical el codigo de riesgo tres equivale a high
     high = sum(
         1
-        for site in d.get("site", [])
-        for a in site.get("alerts", [])
-        if str(a.get("riskcode")) == "3"
+        for alert in root.findall(".//alertitem")
+        if (alert.findtext("riskcode") or "").strip() == "3"
     )
     return 0, high
 
 
 SOURCES = [
-    ("SCA  (npm audit)", "sca-dependencies-report.json", count_npm),
-    ("IaC  (Trivy config)", "trivy-iac-report.json", count_trivy),
-    ("Imagen (Trivy image)", "trivy-image-report.json", count_trivy),
-    ("DAST (OWASP ZAP)", "zap-report.json", count_zap),
+    ("SCA  (npm audit)", "sca-dependencies-report.json", load_json, count_npm),
+    ("IaC  (Trivy config)", "trivy-iac-report.json", load_json, count_trivy),
+    ("Imagen (Trivy image)", "trivy-image-report.json", load_json, count_trivy),
+    ("DAST (OWASP ZAP)", "zap-report.xml", load_xml, count_zap),
 ]
 
 total_c = total_h = 0
 print(f"{'Herramienta':<22}{'CRITICAL':>10}{'HIGH':>8}")
-for label, fname, fn in SOURCES:
-    c, h = fn(load(fname))
-    total_c += c
-    total_h += h
-    print(f"{label:<22}{c:>10}{h:>8}")
+for label, fname, loader, fn in SOURCES:
+    c, h = fn(loader(fname))
 print(f"{'TOTAL':<22}{total_c:>10}{total_h:>8}")
 print(f"Umbrales: CRITICAL <= {MAX_CRITICAL}, HIGH <= {MAX_HIGH}")
 

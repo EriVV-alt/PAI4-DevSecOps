@@ -19,7 +19,7 @@ SCANS = [
         "scan_type": "Trivy Scan",
     },
     {
-        "file": Path("reports/zap-report.json"),
+        "file": Path("reports/zap-report.xml"),
         "scan_type": "ZAP Scan",
     },
 ]

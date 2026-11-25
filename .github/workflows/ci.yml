@@ -96,8 +96,8 @@ jobs:
         continue-on-error: true # Quality Gate: Modo aviso
         run: |
           docker run --rm --network=host -v $(pwd)/reports:/zap/wrk:rw \
-            $ZAP_IMAGE zap-baseline.py -t http://localhost:3000 \
-            -J zap-report.json -r zap-report.html -I
+             $ZAP_IMAGE zap-baseline.py -t http://localhost:3000 \
+             -x zap-report.xml -r zap-report.html -I
 
       - name: Detener staging
         if: always()
