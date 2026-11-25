@@ -20,10 +20,11 @@ env:
   ZAP_IMAGE: zaproxy/zap-stable:2.17.0
 
 jobs:
-  build:
-    name: DevSecOps Pipeline (Build, SAST, SCA, IaC, DAST, Gate)
+  # etapa uno analisis estatico y construccion de imagen
+  analisis_estatico:
+    name: "1. Analisis estatico y Empaquetado"
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 30
 
     steps:
       - name: Descargar el codigo fuente
@@ -37,10 +38,14 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Comprobar construccion de la imagen (Build)
-        run: docker build -t juice-shop-app .
+      - name: Ejecutar IaC (Trivy config sobre Dockerfile y Terraform)
+        continue-on-error: true # gate a modo aviso
+        run: |
+          docker run --rm -v $(pwd):/src -v $(pwd)/reports:/reports \
+            $TRIVY_IMAGE config \
+            --format json --output /reports/trivy-iac-report.json \
+            --severity LOW,MEDIUM,HIGH,CRITICAL /src
 
-      # 1. ETAPA SAST: Análisis Estático de Código Fuente
       - name: Ejecutar SAST (Semgrep)
         uses: semgrep/semgrep-action@v1
         continue-on-error: true # Quality Gate: Modo aviso
@@ -49,49 +54,91 @@ jobs:
             p/security-audit
             p/secrets
 
-      # 2. ETAPA SCA: Analisis de Dependencias SCA
       - name: Ejecutar SCA (Analisis de dependencias Node.js)
         continue-on-error: true # Quality Gate: Modo aviso
         run: |
-          mkdir -p reports
           npm audit --json > reports/sca-dependencies-report.json || true
           npm audit > reports/sca-dependencies-report.txt || true
 
-      # 3. IaC-Scan del Dockerfile
-      - name: Ejecutar IaC (Trivy config sobre Dockerfile)
-        continue-on-error: true # Quality Gate: Modo aviso
+      # construir imagen y exportar a tar sin exponer docker socket
+      - name: Construir y exportar imagen Docker (Build)
         run: |
-          docker run --rm -v $(pwd):/src -v $(pwd)/reports:/reports \
-            $TRIVY_IMAGE config \
-            --format json --output /reports/trivy-iac-report.json \
-            --severity LOW,MEDIUM,HIGH,CRITICAL /src
+          docker build -t juice-shop:local .
+          docker save juice-shop:local -o juice-shop.tar
 
-      # 4. Container-Image-Scan (sin Docker Socket)
+      - name: Subir informes estaticos
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reports-static
+          path: reports/
+
+      - name: Subir imagen exportada
+        uses: actions/upload-artifact@v4
+        with:
+          name: juice-shop-image
+          path: juice-shop.tar
+          retention-days: 1
+
+  # etapa dos analisis del contenedor exportado
+  contenedor:
+    name: "2. Contenedor"
+    needs: [analisis_estatico]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Preparar carpeta de informes
+        run: mkdir -p reports
+
+      - name: Descargar imagen exportada
+        uses: actions/download-artifact@v4
+        with:
+          name: juice-shop-image
+
       - name: Ejecutar seguridad de contenedor (Trivy image)
         continue-on-error: true # Quality Gate: Modo aviso
         run: |
-          docker save juice-shop-app -o image.tar
-          
           docker run --rm \
-            -v "$(pwd)/image.tar:/image.tar:ro" \
+            -v "$(pwd)/juice-shop.tar:/juice-shop.tar:ro" \
             -v "$(pwd)/reports:/reports" \
             $TRIVY_IMAGE image \
-            --input /image.tar \
+            --input /juice-shop.tar \
             --format json \
             --output /reports/trivy-image-report.json \
             --severity HIGH,CRITICAL
-          
-          rm -f image.tar
 
-      # 5 etapa staging despliegue de la aplicacion en entorno de pruebas
-      - name: Iniciar aplicacion para pruebas dinamicas (Staging)
+      - name: Subir informe de contenedor
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reports-container
+          path: reports/
+
+  # etapa tres despliegue efimero en staging y pruebas dinamicas
+  staging_dast:
+    name: "3. Staging y DAST"
+    needs: [contenedor]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Preparar carpeta de informes
+        run: mkdir -p reports && chmod 777 reports
+
+      - name: Descargar imagen exportada
+        uses: actions/download-artifact@v4
+        with:
+          name: juice-shop-image
+
+      - name: Cargar imagen y levantar entorno Staging
         run: |
-          docker run -d -p 3000:3000 --name staging-app juice-shop-app
+          docker load -i juice-shop.tar
+          docker run -d -p 3000:3000 --name staging-app juice-shop:local
           echo "esperando disponibilidad de la aplicacion"
           timeout 60 bash -c 'until curl -s -f http://localhost:3000 > /dev/null; do sleep 2; done' || { docker logs staging-app; exit 1; }
           echo "aplicacion iniciada correctamente en http://localhost:3000"
 
-      # 6 etapa dast analisis dinamico de seguridad web con owasp zap
       - name: Ejecutar DAST (OWASP ZAP)
         continue-on-error: true # Quality Gate: Modo aviso
         run: |
@@ -103,17 +150,33 @@ jobs:
         if: always()
         run: docker rm -f staging-app || true
 
-      # archivar todos los informes de seguridad generados para defectdojo
-      - name: Archivar informes de seguridad
+      - name: Subir informe DAST
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: security-reports
+          name: reports-dast
           path: reports/
 
-      # enviar informes de seguridad a defectdojo siempre aunque fallen etapas previas
+  # etapa de gestion centralizada en defectdojo
+  defectdojo:
+    name: "Gestion centralizada: DefectDojo"
+    needs: [analisis_estatico, contenedor, staging_dast]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Descargar el codigo fuente
+        uses: actions/checkout@v4
+
+      - name: Descargar todos los informes de seguridad
+        uses: actions/download-artifact@v4
+        with:
+          pattern: reports-*
+          merge-multiple: true
+          path: reports
+
       - name: Subir informes a DefectDojo
-        if: always()
         continue-on-error: true
         env:
           DEFECTDOJO_URL: ${{ secrets.DEFECTDOJO_URL }}
@@ -121,9 +184,34 @@ jobs:
           DEFECTDOJO_ENGAGEMENT_ID: ${{ secrets.DEFECTDOJO_ENGAGEMENT_ID }}
         run: |
           python3 -c "import requests" 2>/dev/null || pip install --break-system-packages requests
-          python3 scripts/upload_to_defectdojo.py    
+          python3 scripts/upload_to_defectdojo.py
 
-      # quality gate bloqueante de produccion segun figura cuatro del enunciado
+  # etapa cuatro evaluacion final de politicas
+  evaluacion_politicas:
+    name: "4. Evaluacion de Politicas"
+    needs: [analisis_estatico, contenedor, staging_dast]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Descargar el codigo fuente
+        uses: actions/checkout@v4
+
+      - name: Descargar todos los informes de seguridad
+        uses: actions/download-artifact@v4
+        with:
+          pattern: reports-*
+          merge-multiple: true
+          path: reports
+
+      - name: Archivar informes consolidados
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-reports
+          path: reports/
+
       - name: Quality Gate B (bloqueante)
         env:
           GATE_MAX_CRITICAL: ${{ github.event.inputs.gate_max_critical || '0' }}
