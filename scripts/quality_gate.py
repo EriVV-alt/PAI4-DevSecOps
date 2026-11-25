@@ -72,6 +72,9 @@ total_c = total_h = 0
 print(f"{'Herramienta':<22}{'CRITICAL':>10}{'HIGH':>8}")
 for label, fname, loader, fn in SOURCES:
     c, h = fn(loader(fname))
+    total_c += c
+    total_h += h
+    print(f"{label:<22}{c:>10}{h:>8}")
 print(f"{'TOTAL':<22}{total_c:>10}{total_h:>8}")
 print(f"Umbrales: CRITICAL <= {MAX_CRITICAL}, HIGH <= {MAX_HIGH}")
 
