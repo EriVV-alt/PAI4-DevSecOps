@@ -35,8 +35,26 @@ def load_xml(name):
 
 
 def count_npm(d):
-    v = d.get("metadata", {}).get("vulnerabilities", {})
+    # comprobacion fail closed si npm audit devolvio error sin campo metadata
+    meta = d.get("metadata")
+    if not isinstance(meta, dict) or "vulnerabilities" not in meta:
+        fail_closed("sca-dependencies-report.json", "estructura metadata ausente")
+    v = meta["vulnerabilities"]
     return v.get("critical", 0), v.get("high", 0)
+
+
+def count_semgrep(d):
+    # validacion fail closed de estructura semgrep json
+    if not isinstance(d, dict) or "results" not in d:
+        fail_closed("semgrep-report.json", "campo results ausente")
+    crit = high = 0
+    for item in d["results"]:
+        sev = (item.get("extra", {}).get("severity") or "").upper()
+        if sev == "CRITICAL":
+            crit += 1
+        elif sev in ("ERROR", "HIGH"):
+            high += 1
+    return crit, high
 
 
 def count_trivy(d):
@@ -62,6 +80,7 @@ def count_zap(root):
 
 
 SOURCES = [
+    ("SAST (Semgrep)", "semgrep-report.json", load_json, count_semgrep),
     ("SCA  (npm audit)", "sca-dependencies-report.json", load_json, count_npm),
     ("IaC  (Trivy config)", "trivy-iac-report.json", load_json, count_trivy),
     ("Imagen (Trivy image)", "trivy-image-report.json", load_json, count_trivy),

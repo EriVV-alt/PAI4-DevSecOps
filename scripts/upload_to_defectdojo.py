@@ -4,23 +4,32 @@ import os
 from pathlib import Path
 import requests
 
-# configuracion de informes generados en el pipeline y sus analizadores en defectdojo
+# configuracion de informes generados en el pipeline con titulo unico por test
 SCANS = [
+    {
+        "file": Path("reports/semgrep-report.json"),
+        "scan_type": "Semgrep JSON Report",
+        "test_title": "SAST - Semgrep",
+    },
     {
         "file": Path("reports/sca-dependencies-report.json"),
         "scan_type": "NPM Audit v7+ Scan",
+        "test_title": "SCA - npm audit",
     },
     {
         "file": Path("reports/trivy-iac-report.json"),
         "scan_type": "Trivy Scan",
+        "test_title": "IaC - Trivy Config",
     },
     {
         "file": Path("reports/trivy-image-report.json"),
         "scan_type": "Trivy Scan",
+        "test_title": "Container - Trivy Image",
     },
     {
         "file": Path("reports/zap-report.xml"),
         "scan_type": "ZAP Scan",
+        "test_title": "DAST - OWASP ZAP",
     },
 ]
 
@@ -32,13 +41,15 @@ def upload_report(endpoint: str, headers: dict, engagement_id: str, scan: dict, 
         print(f"[SKIP] No existe o esta vacio: {report_path}")
         return False
 
+    # reimportacion automatica para evitar duplicados de tests y marcar mitigados
     data = {
         "engagement": engagement_id,
         "scan_type": scan["scan_type"],
+        "test_title": scan["test_title"],
         "scan_date": scan_date,
         "active": "true",
         "verified": "false",
-        "close_old_findings": "false",
+        "close_old_findings": "true",
         "minimum_severity": "Info",
     }
 
@@ -53,7 +64,7 @@ def upload_report(endpoint: str, headers: dict, engagement_id: str, scan: dict, 
         )
 
     if resp.status_code in (200, 201):
-        print(f"[OK] Subido {report_path} ({scan['scan_type']}) -> HTTP {resp.status_code}")
+        print(f"[OK] Reimportado {report_path} ({scan['test_title']}) -> HTTP {resp.status_code}")
         return True
 
     raise SystemExit(
@@ -74,7 +85,7 @@ def main() -> None:
             "DEFECTDOJO_API_KEY o DEFECTDOJO_ENGAGEMENT_ID."
         )
 
-    endpoint = f"{base_url}/api/v2/import-scan/"
+    endpoint = f"{base_url}/api/v2/reimport-scan/"
     # incluir cabecera referer para evitar rechazo csrf de django tras proxy https
     headers = {
         "Authorization": f"Token {api_key}",
@@ -87,7 +98,7 @@ def main() -> None:
         if upload_report(endpoint, headers, engagement_id, scan, today):
             uploaded += 1
 
-    print(f"Total de informes importados en DefectDojo: {uploaded}")
+    print(f"Total de informes reimportados en DefectDojo: {uploaded}")
 
 
 if __name__ == "__main__":

@@ -16,6 +16,7 @@ permissions:
   contents: read
 
 env:
+  SEMGREP_IMAGE: semgrep/semgrep:1.186.0
   TRIVY_IMAGE: aquasec/trivy:0.76.2
   ZAP_IMAGE: zaproxy/zap-stable:2.17.0
 
@@ -43,22 +44,23 @@ jobs:
         run: |
           docker run --rm -v $(pwd):/src -v $(pwd)/reports:/reports \
             $TRIVY_IMAGE config \
+            --exit-code 1 \
             --format json --output /reports/trivy-iac-report.json \
             --severity LOW,MEDIUM,HIGH,CRITICAL /src
 
       - name: Ejecutar SAST (Semgrep)
-        uses: semgrep/semgrep-action@v1
         continue-on-error: true # Quality Gate: Modo aviso
-        with:
-          config: >-
-            p/security-audit
-            p/secrets
+        run: |
+          docker run --rm -v "$(pwd):/src" $SEMGREP_IMAGE \
+            semgrep scan --config p/security-audit --config p/secrets \
+            --error --json --output /src/reports/semgrep-report.json /src
 
       - name: Ejecutar SCA (Analisis de dependencias Node.js)
         continue-on-error: true # Quality Gate: Modo aviso
         run: |
-          npm audit --json > reports/sca-dependencies-report.json || true
+          npm audit --json > reports/sca-dependencies-report.json || EXIT_CODE=$?
           npm audit > reports/sca-dependencies-report.txt || true
+          exit ${EXIT_CODE:-0}
 
       # construir imagen y exportar a tar sin exponer docker socket
       - name: Construir y exportar imagen Docker (Build)
@@ -107,6 +109,7 @@ jobs:
             --format json \
             --output /reports/trivy-image-report.json \
             --severity HIGH,CRITICAL
+            --exit-code 1
 
       - name: Subir informe de contenedor
         if: always()
@@ -144,7 +147,7 @@ jobs:
         run: |
           docker run --rm --network=host -v $(pwd)/reports:/zap/wrk:rw \
              $ZAP_IMAGE zap-baseline.py -t http://localhost:3000 \
-             -x zap-report.xml -r zap-report.html -I
+             -x zap-report.xml -r zap-report.html
 
       - name: Detener staging
         if: always()
