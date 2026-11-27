@@ -108,7 +108,7 @@ jobs:
             --input /juice-shop.tar \
             --format json \
             --output /reports/trivy-image-report.json \
-            --severity HIGH,CRITICAL
+            --severity HIGH,CRITICAL \
             --exit-code 1
 
       - name: Subir informe de contenedor

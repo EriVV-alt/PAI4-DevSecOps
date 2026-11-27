@@ -43,7 +43,10 @@ def upload_report(endpoint: str, headers: dict, engagement_id: str, scan: dict, 
 
     # reimportacion automatica para evitar duplicados de tests y marcar mitigados
     data = {
-        "engagement": engagement_id,
+        "product_name": "OWASP Juice Shop",
+        "engagement_name": "GitHub Actions CI/CD",
+        "product_type_name": "Research and Development",
+        "auto_create_context": "true",
         "scan_type": scan["scan_type"],
         "test_title": scan["test_title"],
         "scan_date": scan_date,
@@ -53,8 +56,9 @@ def upload_report(endpoint: str, headers: dict, engagement_id: str, scan: dict, 
         "minimum_severity": "Info",
     }
 
+    mime = "application/xml" if report_path.suffix == ".xml" else "application/json"
     with report_path.open("rb") as fh:
-        files = {"file": (report_path.name, fh, "application/json")}
+        files = {"file": (report_path.name, fh, mime)}
         resp = requests.post(
             endpoint,
             headers=headers,
